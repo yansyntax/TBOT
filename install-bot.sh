@@ -37,17 +37,11 @@ run_step() {
     tput cnorm
 }
 
-# ========================================
-# HEADER
-# ========================================
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${WHITE}     TELEGRAM BOT + VPS API INSTALLER${NC}"
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# ========================================
-# USER INPUT DULU (semua di awal)
-# ========================================
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${WHITE}             BOT CONFIGURATION${NC}"
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -85,14 +79,11 @@ echo -e " ${GREEN}✔${NC} ${WHITE}Konfigurasi diterima. Memulai instalasi...${N
 echo ""
 sleep 1
 
-# ========================================
-# INSTALL BASE
-# ========================================
 run_step "Updating package repository"
 apt update -y &> /dev/null
 
 run_step "Installing required dependencies"
-apt install -y unzip wget curl sqlite3 openssl build-essential python3 jq &> /dev/null
+apt install -y unzip wget curl openssl jq &> /dev/null
 
 run_step "Removing previous Node.js installation"
 apt purge -y nodejs npm &> /dev/null || true
@@ -102,9 +93,6 @@ run_step "Installing Node.js v20"
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash - &> /dev/null
 apt install -y nodejs &> /dev/null
 
-# ========================================
-# DOWNLOAD BOT
-# ========================================
 run_step "Downloading bot package"
 wget -q -O bot.zip https://raw.githubusercontent.com/yansyntax/TBOT/main/VPNBOT/bot.zip
 
@@ -126,9 +114,6 @@ rm -rf /root/bot
 mv "$BOT_FOLDER" /root/bot
 chmod +x /root/bot/shell_script/* 2>/dev/null || true
 
-# ========================================
-# GENERATE API TOKEN & DETERMINE IPs
-# ========================================
 API_TOKEN=$(openssl rand -hex 24)
 API_PORT=3456
 BOT_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
@@ -140,9 +125,6 @@ else
     SAME_VPS=false
 fi
 
-# ========================================
-# SAVE CONFIG (pakai node untuk JSON aman)
-# ========================================
 mkdir -p /root/bot/data
 
 run_step "Saving bot configuration"
@@ -175,25 +157,17 @@ const content = 'const servers = ' + JSON.stringify(server, null, 2) + ';\n\nmod
 fs.writeFileSync('/root/bot/data/server.js', content);
 " "$SERVER_NAME" "$VPN_IP" "$API_PORT" "$API_TOKEN" "$SERVER_LIMIT"
 
-# ========================================
-# INSTALL BOT MODULES + REBUILD SQLITE3
-# ========================================
 cd /root/bot
 
 run_step "Installing bot modules"
 npm install &> /dev/null
-npm install node-telegram-bot-api axios node-cron qrcode canvas &> /dev/null
 
-run_step "Installing sqlite3 from source (compatibility fix)"
-npm uninstall sqlite3 &> /dev/null || true
-npm install sqlite3 --build-from-source &> /dev/null
+run_step "Installing additional modules"
+npm install node-telegram-bot-api axios qrcode sql.js &> /dev/null
 
-run_step "Rebuilding native modules"
-npm rebuild &> /dev/null
+run_step "Removing old sqlite3 (if exists)"
+npm uninstall sqlite3 better-sqlite3 &> /dev/null || true
 
-# ========================================
-# SETUP VPS API SERVER (hanya jika bot & VPN di VPS yang sama)
-# ========================================
 if [[ "$SAME_VPS" == "true" ]]; then
 
 run_step "Setting up VPS API Server (lokal)"
@@ -301,9 +275,6 @@ cd /root/vps-api
 run_step "Installing API modules"
 npm install &> /dev/null
 
-# ========================================
-# CREATE SERVICES
-# ========================================
 run_step "Creating API service"
 cat > /etc/systemd/system/vps-api.service << EOF
 [Unit]
@@ -329,13 +300,7 @@ systemctl enable vps-api &> /dev/null
 systemctl restart vps-api
 
 fi
-# ========================================
-# END API SERVER SETUP (SAME_VPS only)
-# ========================================
 
-# ========================================
-# CREATE BOT SERVICE (selalu)
-# ========================================
 run_step "Creating bot service"
 cat > /etc/systemd/system/bot.service << EOF
 [Unit]
@@ -360,17 +325,11 @@ systemctl daemon-reload
 systemctl enable bot &> /dev/null
 systemctl restart bot
 
-# ========================================
-# CLEANUP
-# ========================================
 run_step "Cleaning temporary files"
 cd ~
 rm -f bot.zip
 rm -rf /tmp/bot_EXTRACT
 
-# ========================================
-# VERIFY SERVICES
-# ========================================
 sleep 3
 BOT_STATUS=$(systemctl is-active bot 2>/dev/null || echo "failed")
 if [[ "$SAME_VPS" == "true" ]]; then
@@ -379,9 +338,6 @@ else
     API_STATUS="remote"
 fi
 
-# ========================================
-# SAVE CREDENTIALS
-# ========================================
 SAVE_FILE="/root/bot-credentials.txt"
 cat > "$SAVE_FILE" << CREDEOF
 ============================================
@@ -409,9 +365,6 @@ PAKASIR API   : $PAKASIR_API_KEY
 CREDEOF
 chmod 600 "$SAVE_FILE"
 
-# ========================================
-# RESULT
-# ========================================
 reset_ui
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}✔ Installation completed successfully${NC}"
