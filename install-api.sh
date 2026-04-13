@@ -51,7 +51,7 @@ run_step "Updating package repository"
 apt update -y &> /dev/null
 
 run_step "Installing required dependencies"
-apt install -y curl openssl &> /dev/null
+apt install -y curl openssl jq &> /dev/null
 
 if ! command -v node &> /dev/null; then
     run_step "Installing Node.js v20"
@@ -61,8 +61,8 @@ else
     run_step "Node.js already installed ($(node -v))"
 fi
 
-API_TOKEN=$(openssl rand -hex 24)
-API_PORT=3456
+API_TOKEN=${API_TOKEN:-$(openssl rand -hex 24)}
+API_PORT=${API_PORT:-3456}
 SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 
 run_step "Setting up VPS API Server"
