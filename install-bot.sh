@@ -66,10 +66,14 @@ fi
 
 echo ""
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${WHITE}             SERVER CONFIGURATION${NC}"
+echo -e "${WHITE}             VPS VPN CONFIGURATION${NC}"
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+echo -e " ${DIM}Masukkan IP VPS VPN (server Xray/VPN).${NC}"
+echo -e " ${DIM}Kosongkan jika bot & VPN di VPS yang sama.${NC}"
+echo ""
 
+read -rp " IP VPS VPN (kosong = VPS ini): " VPN_IP < /dev/tty
 read -rp " Nama server (contoh: SG/ID/JP) [SG]: " SERVER_NAME < /dev/tty
 SERVER_NAME=${SERVER_NAME:-SG}
 
@@ -88,7 +92,7 @@ run_step "Updating package repository"
 apt update -y &> /dev/null
 
 run_step "Installing required dependencies"
-apt install -y unzip wget curl sqlite3 openssl build-essential python3 &> /dev/null
+apt install -y unzip wget curl sqlite3 openssl build-essential python3 jq &> /dev/null
 
 run_step "Removing previous Node.js installation"
 apt purge -y nodejs npm &> /dev/null || true
@@ -123,11 +127,18 @@ mv "$BOT_FOLDER" /root/bot
 chmod +x /root/bot/shell_script/* 2>/dev/null || true
 
 # ========================================
-# GENERATE API TOKEN
+# GENERATE API TOKEN & DETERMINE IPs
 # ========================================
 API_TOKEN=$(openssl rand -hex 24)
 API_PORT=3456
-SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+BOT_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+
+if [[ -z "$VPN_IP" ]]; then
+    VPN_IP="$BOT_IP"
+    SAME_VPS=true
+else
+    SAME_VPS=false
+fi
 
 # ========================================
 # SAVE CONFIG (pakai node untuk JSON aman)
@@ -162,7 +173,7 @@ const server = [{
 }];
 const content = 'const servers = ' + JSON.stringify(server, null, 2) + ';\n\nmodule.exports = servers;\n';
 fs.writeFileSync('/root/bot/data/server.js', content);
-" "$SERVER_NAME" "$SERVER_IP" "$API_PORT" "$API_TOKEN" "$SERVER_LIMIT"
+" "$SERVER_NAME" "$VPN_IP" "$API_PORT" "$API_TOKEN" "$SERVER_LIMIT"
 
 # ========================================
 # INSTALL BOT MODULES + REBUILD SQLITE3
@@ -171,18 +182,21 @@ cd /root/bot
 
 run_step "Installing bot modules"
 npm install &> /dev/null
-npm install node-telegram-bot-api axios node-cron sqlite3 qrcode canvas &> /dev/null
+npm install node-telegram-bot-api axios node-cron qrcode canvas &> /dev/null
 
-run_step "Building sqlite3 from source (compatibility fix)"
-npm rebuild sqlite3 --build-from-source &> /dev/null
+run_step "Installing sqlite3 from source (compatibility fix)"
+npm uninstall sqlite3 &> /dev/null || true
+npm install sqlite3 --build-from-source &> /dev/null
 
 run_step "Rebuilding native modules"
 npm rebuild &> /dev/null
 
 # ========================================
-# SETUP VPS API SERVER
+# SETUP VPS API SERVER (hanya jika bot & VPN di VPS yang sama)
 # ========================================
-run_step "Setting up VPS API Server"
+if [[ "$SAME_VPS" == "true" ]]; then
+
+run_step "Setting up VPS API Server (lokal)"
 mkdir -p /root/vps-api/shell_script
 
 cat > /root/vps-api/package.json << 'PKGEOF'
@@ -290,25 +304,6 @@ npm install &> /dev/null
 # ========================================
 # CREATE SERVICES
 # ========================================
-run_step "Creating bot service"
-cat > /etc/systemd/system/bot.service << EOF
-[Unit]
-Description=Telegram VPN Bot
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/bot
-ExecStart=/usr/bin/node index.js
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 run_step "Creating API service"
 cat > /etc/systemd/system/vps-api.service << EOF
 [Unit]
@@ -329,11 +324,40 @@ Environment=API_PORT=${API_PORT}
 WantedBy=multi-user.target
 EOF
 
-run_step "Starting services"
 systemctl daemon-reload
-systemctl enable bot &> /dev/null
 systemctl enable vps-api &> /dev/null
 systemctl restart vps-api
+
+fi
+# ========================================
+# END API SERVER SETUP (SAME_VPS only)
+# ========================================
+
+# ========================================
+# CREATE BOT SERVICE (selalu)
+# ========================================
+run_step "Creating bot service"
+cat > /etc/systemd/system/bot.service << EOF
+[Unit]
+Description=Telegram VPN Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/bot
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+run_step "Starting bot service"
+systemctl daemon-reload
+systemctl enable bot &> /dev/null
 systemctl restart bot
 
 # ========================================
@@ -345,11 +369,15 @@ rm -f bot.zip
 rm -rf /tmp/bot_EXTRACT
 
 # ========================================
-# VERIFY BOT IS RUNNING
+# VERIFY SERVICES
 # ========================================
 sleep 3
 BOT_STATUS=$(systemctl is-active bot 2>/dev/null || echo "failed")
-API_STATUS=$(systemctl is-active vps-api 2>/dev/null || echo "failed")
+if [[ "$SAME_VPS" == "true" ]]; then
+    API_STATUS=$(systemctl is-active vps-api 2>/dev/null || echo "failed")
+else
+    API_STATUS="remote"
+fi
 
 # ========================================
 # SAVE CREDENTIALS
@@ -364,12 +392,13 @@ cat > "$SAVE_FILE" << CREDEOF
 BOT TOKEN     : $BOT_TOKEN
 OWNER ID      : $OWNER_ID
 BOT NAME      : $BOT_NAME
+BOT IP        : $BOT_IP
 
-SERVER NAME   : $SERVER_NAME
-SERVER IP     : $SERVER_IP
+VPN SERVER    : $SERVER_NAME
+VPN IP        : $VPN_IP
 API PORT      : $API_PORT
 API TOKEN     : $API_TOKEN
-API URL       : http://${SERVER_IP}:${API_PORT}
+API URL       : http://${VPN_IP}:${API_PORT}
 
 PAKASIR SLUG  : $PAKASIR_SLUG
 PAKASIR API   : $PAKASIR_API_KEY
@@ -390,10 +419,10 @@ echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 if [[ "$BOT_STATUS" == "active" ]]; then
-    echo -e " ${WHITE}Bot Service${NC}"
+    echo -e " ${WHITE}Bot Service${NC} (${BOT_IP})"
     echo -e "   ${DIM}Status  :${NC} ${GREEN}Running ✔${NC}"
 else
-    echo -e " ${WHITE}Bot Service${NC}"
+    echo -e " ${WHITE}Bot Service${NC} (${BOT_IP})"
     echo -e "   ${DIM}Status  :${NC} ${RED}Error ✖${NC}"
     echo -e "   ${DIM}Debug   :${NC} journalctl -u bot --no-pager -n 20"
 fi
@@ -401,23 +430,37 @@ echo -e "   ${DIM}Manage  :${NC} systemctl [start|stop|restart|status] bot"
 echo -e "   ${DIM}Log     :${NC} journalctl -u bot -f"
 echo ""
 
-if [[ "$API_STATUS" == "active" ]]; then
-    echo -e " ${WHITE}API Service${NC}"
-    echo -e "   ${DIM}Status  :${NC} ${GREEN}Running ✔${NC}"
+if [[ "$SAME_VPS" == "true" ]]; then
+    if [[ "$API_STATUS" == "active" ]]; then
+        echo -e " ${WHITE}API Service${NC} (lokal)"
+        echo -e "   ${DIM}Status  :${NC} ${GREEN}Running ✔${NC}"
+    else
+        echo -e " ${WHITE}API Service${NC} (lokal)"
+        echo -e "   ${DIM}Status  :${NC} ${RED}Error ✖${NC}"
+        echo -e "   ${DIM}Debug   :${NC} journalctl -u vps-api --no-pager -n 20"
+    fi
+    echo -e "   ${DIM}URL     :${NC} ${CYAN}http://${VPN_IP}:${API_PORT}${NC}"
+    echo -e "   ${DIM}Manage  :${NC} systemctl [start|stop|restart|status] vps-api"
+    echo ""
 else
-    echo -e " ${WHITE}API Service${NC}"
-    echo -e "   ${DIM}Status  :${NC} ${RED}Error ✖${NC}"
-    echo -e "   ${DIM}Debug   :${NC} journalctl -u vps-api --no-pager -n 20"
+    echo -e " ${WHITE}VPS VPN${NC} (${VPN_IP})"
+    echo -e "   ${DIM}API URL :${NC} ${CYAN}http://${VPN_IP}:${API_PORT}${NC}"
+    echo -e "   ${DIM}Token   :${NC} ${YELLOW}${API_TOKEN}${NC}"
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e " ${YELLOW}⚠  LANGKAH SELANJUTNYA:${NC}"
+    echo -e ""
+    echo -e "   ${WHITE}Install API di VPS VPN (${VPN_IP}):${NC}"
+    echo -e "   ${CYAN}wget -qO- https://raw.githubusercontent.com/yansyntax/TBOT/main/install-api.sh | bash${NC}"
+    echo -e ""
+    echo -e "   ${DIM}Atau jalankan manual & set token yang sama:${NC}"
+    echo -e "   ${DIM}export API_TOKEN=${API_TOKEN}${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
 fi
-echo -e "   ${DIM}URL     :${NC} ${CYAN}http://${SERVER_IP}:${API_PORT}${NC}"
-echo -e "   ${DIM}Manage  :${NC} systemctl [start|stop|restart|status] vps-api"
-echo -e "   ${DIM}Log     :${NC} journalctl -u vps-api -f"
-echo ""
+
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e " ${YELLOW}⚠  API Token & credentials disimpan di:${NC}"
+echo -e " ${YELLOW}⚠  Credentials disimpan di:${NC}"
 echo -e "    ${WHITE}/root/bot-credentials.txt${NC}"
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-echo -e " ${DIM}Test API:${NC}"
-echo -e " curl -H 'X-Api-Token: ${API_TOKEN}' http://localhost:${API_PORT}/api/ping"
 echo ""
