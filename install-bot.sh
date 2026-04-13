@@ -37,11 +37,17 @@ run_step() {
     tput cnorm
 }
 
+# ========================================
+# HEADER
+# ========================================
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${WHITE}     TELEGRAM BOT + VPS API INSTALLER${NC}"
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
+# ========================================
+# USER INPUT DULU (semua di awal)
+# ========================================
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${WHITE}             BOT CONFIGURATION${NC}"
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -59,26 +65,13 @@ if [[ -z "$BOT_TOKEN" || -z "$OWNER_ID" ]]; then
 fi
 
 echo ""
-echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${WHITE}             VPS VPN CONFIGURATION${NC}"
-echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-echo -e " ${DIM}Masukkan IP VPS VPN (server Xray/VPN).${NC}"
-echo -e " ${DIM}Kosongkan jika bot & VPN di VPS yang sama.${NC}"
-echo ""
-
-read -rp " IP VPS VPN (kosong = VPS ini): " VPN_IP < /dev/tty
-read -rp " Nama server (contoh: SG/ID/JP) [SG]: " SERVER_NAME < /dev/tty
-SERVER_NAME=${SERVER_NAME:-SG}
-
-read -rp " Limit akun server [90]: " SERVER_LIMIT < /dev/tty
-SERVER_LIMIT=${SERVER_LIMIT:-90}
-
-echo ""
 echo -e " ${GREEN}✔${NC} ${WHITE}Konfigurasi diterima. Memulai instalasi...${NC}"
 echo ""
 sleep 1
 
+# ========================================
+# INSTALL BASE
+# ========================================
 run_step "Updating package repository"
 apt update -y &> /dev/null
 
@@ -93,6 +86,9 @@ run_step "Installing Node.js v20"
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash - &> /dev/null
 apt install -y nodejs &> /dev/null
 
+# ========================================
+# DOWNLOAD BOT
+# ========================================
 run_step "Downloading bot package"
 wget -q -O bot.zip https://raw.githubusercontent.com/yansyntax/TBOT/main/VPNBOT/bot.zip
 
@@ -114,17 +110,14 @@ rm -rf /root/bot
 mv "$BOT_FOLDER" /root/bot
 chmod +x /root/bot/shell_script/* 2>/dev/null || true
 
-API_TOKEN=$(openssl rand -hex 24)
-API_PORT=3456
+# ========================================
+# DETECT BOT IP
+# ========================================
 BOT_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 
-if [[ -z "$VPN_IP" ]]; then
-    VPN_IP="$BOT_IP"
-    SAME_VPS=true
-else
-    SAME_VPS=false
-fi
-
+# ========================================
+# SAVE CONFIG (pakai node untuk JSON aman)
+# ========================================
 mkdir -p /root/bot/data
 
 run_step "Saving bot configuration"
@@ -140,167 +133,30 @@ const data = {
 fs.writeFileSync('/root/bot/data/.avars.json', JSON.stringify(data, null, 2));
 " "$BOT_TOKEN" "$OWNER_ID" "$PAKASIR_SLUG" "$PAKASIR_API_KEY" "$BOT_NAME"
 
-run_step "Configuring server with API mode"
-node -e "
-const fs = require('fs');
-const server = [{
-  name: process.argv[1],
-  ip: process.argv[2],
-  username: 'root',
-  pass: '',
-  apiUrl: 'http://' + process.argv[2] + ':' + process.argv[3],
-  apiToken: process.argv[4],
-  limit: parseInt(process.argv[5]) || 90,
-  used: 0
-}];
-const content = 'const servers = ' + JSON.stringify(server, null, 2) + ';\n\nmodule.exports = servers;\n';
-fs.writeFileSync('/root/bot/data/server.js', content);
-" "$SERVER_NAME" "$VPN_IP" "$API_PORT" "$API_TOKEN" "$SERVER_LIMIT"
+run_step "Configuring empty server list"
+cat > /root/bot/data/server.js << 'SRVEOF'
+const servers = [];
 
+module.exports = servers;
+SRVEOF
+
+# ========================================
+# INSTALL BOT MODULES + REBUILD SQLITE3
+# ========================================
 cd /root/bot
 
 run_step "Installing bot modules"
 npm install &> /dev/null
 
 run_step "Installing additional modules"
-npm install node-telegram-bot-api axios qrcode sql.js &> /dev/null
+npm install node-telegram-bot-api axios qrcode sql.js ssh2 &> /dev/null
 
 run_step "Removing old sqlite3 (if exists)"
 npm uninstall sqlite3 better-sqlite3 &> /dev/null || true
 
-if [[ "$SAME_VPS" == "true" ]]; then
-
-run_step "Setting up VPS API Server (lokal)"
-mkdir -p /root/vps-api/shell_script
-
-cat > /root/vps-api/package.json << 'PKGEOF'
-{
-  "name": "vps-bot-api",
-  "version": "1.0.0",
-  "scripts": { "start": "node server.js" },
-  "dependencies": { "express": "^4.21.0" }
-}
-PKGEOF
-
-cat > /root/vps-api/server.js << 'SRVEOF'
-const express = require('express');
-const { execFile } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-
-const app = express();
-app.use(express.json({ limit: '5mb' }));
-
-const PORT = process.env.API_PORT || 3456;
-const TOKEN = process.env.API_TOKEN || '';
-
-if (!TOKEN) {
-  console.error('[API] API_TOKEN belum diset!');
-  process.exit(1);
-}
-
-const SCRIPT_DIR = path.join(__dirname, 'shell_script');
-
-function authMiddleware(req, res, next) {
-  const token = req.headers['x-api-token'] || req.body.token;
-  if (!token || token !== TOKEN) {
-    return res.status(401).json({ error: 'Unauthorized', message: 'Token tidak valid' });
-  }
-  next();
-}
-
-app.use('/api', authMiddleware);
-
-app.get('/api/ping', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-app.post('/api/exec', (req, res) => {
-  const { script, args } = req.body;
-  if (!script) return res.status(400).json({ error: 'BAD_REQUEST', message: 'Parameter "script" wajib diisi' });
-  if (!/^[a-zA-Z0-9_]+$/.test(script)) return res.status(400).json({ error: 'BAD_REQUEST', message: 'Nama script tidak valid' });
-
-  const scriptPath = path.join(SCRIPT_DIR, script);
-  if (!fs.existsSync(scriptPath)) return res.status(404).json({ error: 'SCRIPT_NOT_FOUND', message: `Script "${script}" tidak ditemukan` });
-
-  const safeArgs = (args || []).map(a => String(a));
-  execFile('bash', [scriptPath, ...safeArgs], { timeout: 30000 }, (err, stdout, stderr) => {
-    if (err) {
-      if (err.killed) return res.status(504).json({ error: 'TIMEOUT', message: 'Script timeout (30 detik)', output: stdout || '' });
-      return res.json({ success: false, exitCode: err.code, output: ((stdout || '') + (stderr || '')).trim() });
-    }
-    res.json({ success: true, exitCode: 0, output: ((stdout || '') + (stderr || '')).trim() });
-  });
-});
-
-app.post('/api/sync', (req, res) => {
-  const { scripts } = req.body;
-  if (!scripts || !Array.isArray(scripts) || scripts.length === 0) {
-    return res.status(400).json({ error: 'BAD_REQUEST', message: 'Parameter "scripts" wajib diisi' });
-  }
-  if (!fs.existsSync(SCRIPT_DIR)) fs.mkdirSync(SCRIPT_DIR, { recursive: true });
-
-  const results = [];
-  for (const item of scripts) {
-    if (!item.name || !item.content) { results.push({ name: item.name || '?', status: 'skipped', reason: 'nama atau isi kosong' }); continue; }
-    if (!/^[a-zA-Z0-9_]+$/.test(item.name)) { results.push({ name: item.name, status: 'skipped', reason: 'nama tidak valid' }); continue; }
-    try {
-      const filePath = path.join(SCRIPT_DIR, item.name);
-      fs.writeFileSync(filePath, item.content, 'utf8');
-      fs.chmodSync(filePath, '755');
-      results.push({ name: item.name, status: 'ok' });
-    } catch (e) { results.push({ name: item.name, status: 'error', reason: e.message }); }
-  }
-  const ok = results.filter(r => r.status === 'ok').length;
-  const failed = results.filter(r => r.status !== 'ok').length;
-  res.json({ success: true, synced: ok, failed, details: results });
-});
-
-app.get('/api/scripts', (req, res) => {
-  if (!fs.existsSync(SCRIPT_DIR)) return res.json({ scripts: [] });
-  const files = fs.readdirSync(SCRIPT_DIR).filter(f => fs.statSync(path.join(SCRIPT_DIR, f)).isFile());
-  res.json({ scripts: files });
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[API] VPS Bot API running on port ${PORT}`);
-  console.log(`[API] Script directory: ${SCRIPT_DIR}`);
-});
-SRVEOF
-
-run_step "Syncing shell scripts to API"
-cp /root/bot/shell_script/* /root/vps-api/shell_script/ 2>/dev/null || true
-
-cd /root/vps-api
-run_step "Installing API modules"
-npm install &> /dev/null
-
-run_step "Creating API service"
-cat > /etc/systemd/system/vps-api.service << EOF
-[Unit]
-Description=VPS Bot API Server
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/vps-api
-ExecStart=/usr/bin/node server.js
-Restart=always
-RestartSec=5
-Environment=API_TOKEN=${API_TOKEN}
-Environment=API_PORT=${API_PORT}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable vps-api &> /dev/null
-systemctl restart vps-api
-
-fi
-
+# ========================================
+# CREATE BOT SERVICE
+# ========================================
 run_step "Creating bot service"
 cat > /etc/systemd/system/bot.service << EOF
 [Unit]
@@ -325,23 +181,27 @@ systemctl daemon-reload
 systemctl enable bot &> /dev/null
 systemctl restart bot
 
+# ========================================
+# CLEANUP
+# ========================================
 run_step "Cleaning temporary files"
 cd ~
 rm -f bot.zip
 rm -rf /tmp/bot_EXTRACT
 
+# ========================================
+# VERIFY
+# ========================================
 sleep 3
 BOT_STATUS=$(systemctl is-active bot 2>/dev/null || echo "failed")
-if [[ "$SAME_VPS" == "true" ]]; then
-    API_STATUS=$(systemctl is-active vps-api 2>/dev/null || echo "failed")
-else
-    API_STATUS="remote"
-fi
 
+# ========================================
+# SAVE CREDENTIALS
+# ========================================
 SAVE_FILE="/root/bot-credentials.txt"
 cat > "$SAVE_FILE" << CREDEOF
 ============================================
-  BOT & API CREDENTIALS
+  BOT CREDENTIALS
   Tanggal: $(date '+%Y-%m-%d %H:%M:%S')
 ============================================
 
@@ -349,12 +209,6 @@ BOT TOKEN     : $BOT_TOKEN
 OWNER ID      : $OWNER_ID
 BOT NAME      : $BOT_NAME
 BOT IP        : $BOT_IP
-
-VPN SERVER    : $SERVER_NAME
-VPN IP        : $VPN_IP
-API PORT      : $API_PORT
-API TOKEN     : $API_TOKEN
-API URL       : http://${VPN_IP}:${API_PORT}
 
 PAKASIR SLUG  : $PAKASIR_SLUG
 PAKASIR API   : $PAKASIR_API_KEY
@@ -365,6 +219,9 @@ PAKASIR API   : $PAKASIR_API_KEY
 CREDEOF
 chmod 600 "$SAVE_FILE"
 
+# ========================================
+# RESULT
+# ========================================
 reset_ui
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}✔ Installation completed successfully${NC}"
@@ -382,38 +239,13 @@ fi
 echo -e "   ${DIM}Manage  :${NC} systemctl [start|stop|restart|status] bot"
 echo -e "   ${DIM}Log     :${NC} journalctl -u bot -f"
 echo ""
-
-if [[ "$SAME_VPS" == "true" ]]; then
-    if [[ "$API_STATUS" == "active" ]]; then
-        echo -e " ${WHITE}API Service${NC} (lokal)"
-        echo -e "   ${DIM}Status  :${NC} ${GREEN}Running ✔${NC}"
-    else
-        echo -e " ${WHITE}API Service${NC} (lokal)"
-        echo -e "   ${DIM}Status  :${NC} ${RED}Error ✖${NC}"
-        echo -e "   ${DIM}Debug   :${NC} journalctl -u vps-api --no-pager -n 20"
-    fi
-    echo -e "   ${DIM}URL     :${NC} ${CYAN}http://${VPN_IP}:${API_PORT}${NC}"
-    echo -e "   ${DIM}Manage  :${NC} systemctl [start|stop|restart|status] vps-api"
-    echo ""
-else
-    echo -e " ${WHITE}VPS VPN${NC} (${VPN_IP})"
-    echo -e "   ${DIM}API URL :${NC} ${CYAN}http://${VPN_IP}:${API_PORT}${NC}"
-    echo -e "   ${DIM}Token   :${NC} ${YELLOW}${API_TOKEN}${NC}"
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e " ${YELLOW}⚠  LANGKAH SELANJUTNYA:${NC}"
-    echo -e ""
-    echo -e "   ${WHITE}Install API di VPS VPN (${VPN_IP}):${NC}"
-    echo -e "   ${CYAN}wget -qO- https://raw.githubusercontent.com/yansyntax/TBOT/main/install-api.sh | bash${NC}"
-    echo -e ""
-    echo -e "   ${DIM}Atau jalankan manual & set token yang sama:${NC}"
-    echo -e "   ${DIM}export API_TOKEN=${API_TOKEN}${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-fi
-
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e " ${YELLOW}⚠  Credentials disimpan di:${NC}"
-echo -e "    ${WHITE}/root/bot-credentials.txt${NC}"
+echo -e " ${YELLOW}⚠  LANGKAH SELANJUTNYA:${NC}"
+echo -e ""
+echo -e "   ${WHITE}Buka Telegram → /admin → 📌 Add Server${NC}"
+echo -e "   ${DIM}Masukkan IP + password root VPS VPN.${NC}"
+echo -e "   ${DIM}Bot otomatis install API & sync scripts.${NC}"
 echo -e "${CYAN_SOFT}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e " ${DIM}Credentials disimpan di:${NC} ${WHITE}/root/bot-credentials.txt${NC}"
 echo ""
