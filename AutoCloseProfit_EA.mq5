@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                           AutoCloseProfit_EA.mq5 |
+//|                                     AutoCloseProfit_XAUUSD.mq5 |
 //|                                  Copyright 2026, Trading System  |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -10,18 +10,20 @@
 #include <Trade\Trade.mqh>
 CTrade trade;
 
-// --- Input Parameters ---
-input group "--- Risk & Entry Settings ---"
+// --- Input Parameters Khusus XAUUSD ---
+input group "--- Risk & Entry XAUUSD ---"
 input double   InpLotSize         = 0.01;     // Ukuran Lot per Entry
-input int      InpMaxEntries      = 5;        // Maksimal Entry Terbuka
-input ulong    InpMagicNumber     = 998877;   // Magic Number EA
+input int      InpMaxEntries      = 5;        // Maksimal Entry Terbuka (Max 5)
+input double   InpMinProfitUSD    = 0.50;     // Target Profit Minimal per Order ($)
+input ulong    InpMagicNumber     = 777999;   // Magic Number EA XAUUSD
 
-input group "--- Trend Indicator Settings ---"
-input int      InpMAPeriod        = 20;       // Period Moving Average (Trend Detector)
-input ENUM_MA_METHOD InpMAMethod  = MODE_SMA; // Tipe Moving Average
+input group "--- Indikator Tren Gold ---"
+input int      InpMAPeriod        = 50;       // Period Moving Average (Trend Major)
+input int      InpRSIPeriod       = 14;       // Period RSI (Filter Overbought/Oversold)
 
 // --- Global Variables ---
 int handleMA;
+int handleRSI;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -30,15 +32,17 @@ int OnInit()
   {
    trade.SetExpertMagicNumber(InpMagicNumber);
    
-   // Inisialisasi Indikator Moving Average untuk Filter Tren
-   handleMA = iMA(_Symbol, _Period, InpMAPeriod, 0, InpMAMethod, PRICE_CLOSE);
-   if(handleMA == INVALID_HANDLE)
+   // Inisialisasi Indikator MA & RSI
+   handleMA  = iMA(_Symbol, _Period, InpMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   handleRSI = iRSI(_Symbol, _Period, InpRSIPeriod, PRICE_CLOSE);
+   
+   if(handleMA == INVALID_HANDLE || handleRSI == INVALID_HANDLE)
      {
-      Print("Gagal membuat handle indikator MA!");
+      Print("Gagal membuat handle indikator!");
       return(INIT_FAILED);
      }
 
-   Print("EA MT5 Auto Close Profit & Re-Entry Berhasil Dijalankan.");
+   Print("EA XAUUSD Auto Close Profit Berhasil Dijalankan.");
    return(INIT_SUCCEEDED);
   }
 
@@ -48,7 +52,8 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    IndicatorRelease(handleMA);
-   Print("EA Dihentikan.");
+   IndicatorRelease(handleRSI);
+   Print("EA XAUUSD Dihentikan.");
   }
 
 //+------------------------------------------------------------------+
@@ -56,10 +61,10 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   // 1. Cek dan Close semua posisi yang sedang Running Profit
+   // 1. Cek dan Close semua posisi XAUUSD yang sudah mencapai Target Profit
    CloseProfitPositions();
 
-   // 2. Jika tidak ada posisi running yang berlebih, cari sinyal Re-Entry
+   // 2. Cek apakah total entry masih di bawah batas maksimal (Max 5)
    int currentOpenPositions = CountOpenPositions();
    if(currentOpenPositions < InpMaxEntries)
      {
@@ -68,7 +73,7 @@ void OnTick()
   }
 
 //+------------------------------------------------------------------+
-//| Fungsi untuk Menutup Posisi yang Running Profit                  |
+//| Fungsi Close Posisi XAUUSD jika Profit >= InpMinProfitUSD         |
 //+------------------------------------------------------------------+
 void CloseProfitPositions()
   {
@@ -82,11 +87,11 @@ void CloseProfitPositions()
            {
             double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
             
-            // Jika running profit lebih besar dari 0 (plus), langsung CLOSE
-            if(profit > 0.0)
+            // Tutup posisi jika profit bersih sudah melebihi target minimal ($0.50)
+            if(profit >= InpMinProfitUSD)
               {
                trade.PositionClose(ticket);
-               Print("Posisi #", ticket, " running profit $", profit, " -> BERHASIL DICLOSE!");
+               Print("XAUUSD Posisi #", ticket, " Profit $", profit, " -> CLOSED!");
               }
            }
         }
@@ -94,46 +99,47 @@ void CloseProfitPositions()
   }
 
 //+------------------------------------------------------------------+
-//| Fungsi untuk Mengukur Tren dan Membuka Posisi Baru (Re-entry)   |
+//| Fungsi Analisis Sinyal & Re-entry XAUUSD                        |
 //+------------------------------------------------------------------+
 void CheckAndExecuteEntry()
   {
    double ma[];
+   double rsi[];
    double closePrice[];
    
    ArraySetAsSeries(ma, true);
+   ArraySetAsSeries(rsi, true);
    ArraySetAsSeries(closePrice, true);
 
    if(CopyBuffer(handleMA, 0, 0, 2, ma) < 2) return;
+   if(CopyBuffer(handleRSI, 0, 0, 2, rsi) < 2) return;
    if(CopyClose(_Symbol, _Period, 0, 2, closePrice) < 2) return;
 
    double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   // Jika Harga Running di ATAS Indikator MA -> Sinyal UPTREND (BUY)
-   if(closePrice[0] > ma[0])
+   // Sinyal BUY: Harga di atas EMA 50 & RSI > 50 (Tren Naik)
+   if(closePrice[0] > ma[0] && rsi[0] > 50)
      {
-      // Pastikan belum ada posisi BUY yang baru saja terbuka di tick ini
       if(!HasPositionOfType(POSITION_TYPE_BUY))
         {
-         trade.Buy(InpLotSize, _Symbol, currentAsk, 0, 0, "Join Trend Buy");
-         Print("Sinyal Naik / Uptrend Detected -> Entry BUY");
+         trade.Buy(InpLotSize, _Symbol, currentAsk, 0, 0, "XAUUSD Buy Trend");
+         Print("XAUUSD Uptrend Detected -> Entry BUY");
         }
      }
-   // Jika Harga Running di BAWAH Indikator MA -> Sinyal DOWNTREND (SELL)
-   else if(closePrice[0] < ma[0])
+   // Sinyal SELL: Harga di bawah EMA 50 & RSI < 50 (Tren Turun)
+   else if(closePrice[0] < ma[0] && rsi[0] < 50)
      {
-      // Pastikan belum ada posisi SELL yang baru saja terbuka di tick ini
       if(!HasPositionOfType(POSITION_TYPE_SELL))
         {
-         trade.Sell(InpLotSize, _Symbol, currentBid, 0, 0, "Join Trend Sell");
-         Print("Sinyal Turun / Downtrend Detected -> Entry SELL");
+         trade.Sell(InpLotSize, _Symbol, currentBid, 0, 0, "XAUUSD Sell Trend");
+         Print("XAUUSD Downtrend Detected -> Entry SELL");
         }
      }
   }
 
 //+------------------------------------------------------------------+
-//| Fungsi Helper: Hitung Total Posisi Terbuka                       |
+//| Helper: Hitung Jumlah Posisi Terbuka                             |
 //+------------------------------------------------------------------+
 int CountOpenPositions()
   {
@@ -153,7 +159,7 @@ int CountOpenPositions()
   }
 
 //+------------------------------------------------------------------+
-//| Fungsi Helper: Cek Jenis Posisi                                  |
+//| Helper: Cek Posisi Aktif                                         |
 //+------------------------------------------------------------------+
 bool HasPositionOfType(ENUM_POSITION_TYPE type)
   {
