@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
-//|                               M1_Scalp_AdvancedSMC_5Layer.mq5    |
+//|                               M5_Scalp_AdvancedSMC_5Layer.mq5    |
 //|                               Copyright 2026, Ultimate SMC Bot   |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "12.00"
+#property version   "13.00"
 
 #include <Trade\Trade.mqh>
 CTrade trade;
@@ -12,16 +12,16 @@ CTrade trade;
 // --- Input Settings ---
 input group "--- Settings Layer & Basket Risk ---"
 input double   InpLotSize            = 0.01;     // Lot per Entry
-input int      InpLayerCount         = 5;        // Dikurangi jadi 5 Layer
-input ulong    InpMagicNumber        = 112233;   // Magic Number EA
+input int      InpLayerCount         = 5;        // 5 Layer Instant Execution
+input ulong    InpMagicNumber        = 554433;   // Magic Number EA
 
 input group "--- Basket Profit & Cut Loss (TOTAL KESELURUHAN) ---"
-input double   InpTotalTargetProfit  = 1.25;     // Target Profit Gabungan 5 Layer (1.25 USC)
+input double   InpTotalTargetProfit  = 1.50;     // Target Profit Gabungan 5 Layer (1.50 USC)
 input double   InpTotalMaxLoss       = 10.0;     // TOTAL MAX LOSS 5 LAYER (-10 USC TOTAL)
 
-input group "--- SMC & Price Action Settings ---"
-input int      InpLookbackCandles    = 30;       // Lookback Candle untuk SnR, SnD, MSS & Base
-input double   InpMinFvgPips         = 10.0;     // Celah FVG Minimal (10 Pips)
+input group "--- SMC & Price Action Settings (M5 Optimized) ---"
+input int      InpLookbackCandles    = 24;       // Lookback 24 Candle M5 (2 Jam Terakhir)
+input double   InpMinFvgPips         = 15.0;     // Celah FVG Minimal M5 (15 Pips)
 
 datetime lastTradeTime = 0;
 
@@ -29,7 +29,7 @@ datetime lastTradeTime = 0;
 int OnInit()
   {
    trade.SetExpertMagicNumber(InpMagicNumber);
-   Print("EA Advanced SMC (MSS, CRT, SnD, RBS, RBR, FVG) Active!");
+   Print("EA Advanced SMC M5 (5 Layer & Hard Cut -10 USC) Active!");
    return(INIT_SUCCEEDED);
   }
 
@@ -37,20 +37,20 @@ void OnDeinit(const int reason) {}
 
 void OnTick()
   {
-   // 1. Eksekusi Basket Cut Loss (-10 USC TOTAL) atau Basket Profit
+   // 1. Monitor Basket PnL: Hard Cut All (-10 USC) / Take Profit All
    ManageBasketPL();
 
-   // 2. Jeda 5 detik antar transaksi
-   if(TimeCurrent() - lastTradeTime < 5) return;
+   // 2. Jeda 10 detik antar siklus
+   if(TimeCurrent() - lastTradeTime < 10) return;
 
-   // 3. Analisis Struktur SMC & Eksekusi Entry 5 Layer
+   // 3. Analisis SMC di M5 & Eksekusi 5 Layer
    if(CountPositions() == 0)
      {
-      ExecuteAdvancedSMCEntry();
+      ExecuteM5SMCEntry();
      }
   }
 
-// --- FUNGSI MANAGEMEN TOTAL BASKET LOSS/PROFIT ---
+// --- FUNGSI MANAGEMENT TOTAL BASKET LOSS/PROFIT ---
 void ManageBasketPL()
   {
    if(CountPositions() == 0) return;
@@ -73,7 +73,7 @@ void ManageBasketPL()
    if(totalProfit >= InpTotalTargetProfit)
      {
       CloseAllPositions();
-      Print("BASKET PROFIT TERCAPAI: ", totalProfit, " USC -> CLOSE ALL!");
+      Print("M5 BASKET PROFIT TERCAPAI: ", totalProfit, " USC -> CLOSE ALL!");
       lastTradeTime = TimeCurrent();
      }
    // B. HARD BASKET CUT LOSS (-10 USC TOTAL)
@@ -100,8 +100,8 @@ void CloseAllPositions()
      }
   }
 
-// --- FUNGSI EKSEKUSI ADVANCED SMC ---
-void ExecuteAdvancedSMCEntry()
+// --- FUNGSI ANALISIS SMC KHUSUS M5 ---
+void ExecuteM5SMCEntry()
   {
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
@@ -112,21 +112,21 @@ void ExecuteAdvancedSMCEntry()
    double bid   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
 
-   // 1. DETEKSI MSS (Market Structure Shift)
-   bool isMSS_Bullish = (rates[0].close > rates[2].high); // Harga tembus High sebelumnya
-   bool isMSS_Bearish = (rates[0].close < rates[2].low);  // Harga tembus Low sebelumnya
+   // 1. DETEKSI MSS (Market Structure Shift M5)
+   bool isMSS_Bullish = (rates[0].close > rates[2].high); 
+   bool isMSS_Bearish = (rates[0].close < rates[2].low);  
 
-   // 2. DETEKSI FVG (Fair Value Gap / Imbalance)
+   // 2. DETEKSI FVG (Fair Value Gap M5)
    bool isBullishFVG = (rates[0].low - rates[2].high) / (10 * point) >= InpMinFvgPips;
    bool isBearishFVG = (rates[2].low - rates[0].high) / (10 * point) >= InpMinFvgPips;
 
    // 3. DETEKSI RALLY BASE RALLY (RBR) & DROP BASE DROP (DBD)
    double baseRange = MathAbs(rates[1].high - rates[1].low) / (10 * point);
-   bool isBase = baseRange <= 15.0; // Candle kecil (Base)
+   bool isBase = baseRange <= 20.0; 
    bool isRallyBaseRally = (rates[2].close > rates[2].open) && isBase && (rates[0].close > rates[0].open);
    bool isDropBaseDrop   = (rates[2].close < rates[2].open) && isBase && (rates[0].close < rates[0].open);
 
-   // 4. DETEKSI AREA DEMAND, SUPPLY & RBS (Resistance Become Support)
+   // 4. DEMAND & SUPPLY LEVEL M5
    double demandLevel = rates[1].low;
    double supplyLevel = rates[1].high;
 
@@ -136,29 +136,29 @@ void ExecuteAdvancedSMCEntry()
       if(rates[i].high > supplyLevel)  supplyLevel = rates[i].high;
      }
 
-   // 5. RETEST / PULLBACK CONFIRMATION
-   bool isDemandPullback = (bid - demandLevel) / (10 * point) <= 25.0 && (rates[0].close > rates[0].open);
-   bool isSupplyPullback = (supplyLevel - ask) / (10 * point) <= 25.0 && (rates[0].close < rates[0].open);
+   // 5. RETEST / PULLBACK CONFIRMATION M5
+   bool isDemandPullback = (bid - demandLevel) / (10 * point) <= 30.0 && (rates[0].close > rates[0].open);
+   bool isSupplyPullback = (supplyLevel - ask) / (10 * point) <= 30.0 && (rates[0].close < rates[0].open);
 
-   // --- SYARAT FINAL ENTRY SMC ---
+   // --- EKSEKUSI FINAL SETUP M5 ---
 
-   // SETUP BUY: (MSS Bullish / RBR / FVG) AND (Retest ke Area Demand / RBS)
+   // SETUP BUY M5
    if((isMSS_Bullish || isBullishFVG || isRallyBaseRally) && isDemandPullback)
      {
-      Print("SMC BUY Confluence Confirmed (MSS/FVG/RBR + Pullback) -> Tembak 5 BUY!");
+      Print("M5 SMC BUY Confirmed -> Tembak 5 BUY!");
       for(int k = 0; k < InpLayerCount; k++)
         {
-         trade.Buy(InpLotSize, _Symbol, ask, 0, 0, "SMC Buy Confluence");
+         trade.Buy(InpLotSize, _Symbol, ask, 0, 0, "M5 SMC Buy");
         }
       lastTradeTime = TimeCurrent();
      }
-   // SETUP SELL: (MSS Bearish / DBD / FVG) AND (Retest ke Area Supply / SBR)
+   // SETUP SELL M5
    else if((isMSS_Bearish || isBearishFVG || isDropBaseDrop) && isSupplyPullback)
      {
-      Print("SMC SELL Confluence Confirmed (MSS/FVG/DBD + Pullback) -> Tembak 5 SELL!");
+      Print("M5 SMC SELL Confirmed -> Tembak 5 SELL!");
       for(int k = 0; k < InpLayerCount; k++)
         {
-         trade.Sell(InpLotSize, _Symbol, bid, 0, 0, "SMC Sell Confluence");
+         trade.Sell(InpLotSize, _Symbol, bid, 0, 0, "M5 SMC Sell");
         }
       lastTradeTime = TimeCurrent();
      }
